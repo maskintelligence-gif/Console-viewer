@@ -4,6 +4,7 @@ import { Server } from "socket.io";
 import { createServer as createViteServer } from "vite";
 import puppeteer from "puppeteer";
 import Database from "better-sqlite3";
+import rateLimit from "express-rate-limit";
 
 const db = new Database("scans.db");
 db.exec(`
@@ -19,13 +20,30 @@ db.exec(`
   )
 `);
 
+// Simple in-memory rate limiter for Socket.IO scans
+const scanRateLimits = new Map<string, { count: number; resetTime: number }>();
+const SCAN_LIMIT = 5; // Max 5 scans
+const SCAN_WINDOW = 60 * 1000; // Per 1 minute
+
 async function startServer() {
   const app = express();
   const httpServer = createServer(app);
   const io = new Server(httpServer);
   const PORT = 3000;
 
+  // Trust proxy for rate limiting (needed if behind Render/Railway proxy)
+  app.set("trust proxy", 1);
+
   app.use(express.json());
+
+  // Rate limit for API endpoints
+  const apiLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000, // 15 minutes
+    max: 100, // Limit each IP to 100 requests per `window`
+    message: { error: "Too many requests from this IP, please try again after 15 minutes" },
+  });
+
+  app.use("/api/", apiLimiter);
 
   app.get("/api/history", (req, res) => {
     try {
@@ -53,9 +71,32 @@ async function startServer() {
 
   // Socket.IO logic for real-time console streaming
   io.on("connection", (socket) => {
-    console.log("Client connected");
+    const clientIp = socket.handshake.address;
+    console.log(`Client connected from ${clientIp}`);
 
     socket.on("scan-url", async (url) => {
+      // Apply Socket Rate Limiting
+      const now = Date.now();
+      let userLimit = scanRateLimits.get(clientIp) || { count: 0, resetTime: now + SCAN_WINDOW };
+
+      if (now > userLimit.resetTime) {
+        userLimit.count = 0;
+        userLimit.resetTime = now + SCAN_WINDOW;
+      }
+
+      if (userLimit.count >= SCAN_LIMIT) {
+        socket.emit("console-log", {
+          type: "error",
+          text: `Rate limit exceeded. You can only run ${SCAN_LIMIT} scans per minute. Please wait.`,
+          timestamp: new Date().toISOString(),
+        });
+        socket.emit("scan-complete", { status: "error", message: "Rate limit exceeded" });
+        return;
+      }
+
+      userLimit.count++;
+      scanRateLimits.set(clientIp, userLimit);
+
       console.log(`Scanning URL: ${url}`);
       let browser;
       const logs: any[] = [];
@@ -65,7 +106,13 @@ async function startServer() {
       try {
         browser = await puppeteer.launch({
           headless: true,
-          args: ["--no-sandbox", "--disable-setuid-sandbox"],
+          executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
+          args: [
+            "--no-sandbox", 
+            "--disable-setuid-sandbox", 
+            "--disable-dev-shm-usage", // Crucial for Docker environments
+            "--disable-gpu"
+          ],
         });
         const page = await browser.newPage();
         await page.setViewport({ width: 1280, height: 800 });
