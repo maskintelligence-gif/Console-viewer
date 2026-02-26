@@ -511,6 +511,10 @@ export default function App() {
         </div>
       </main>
 
+      <footer className="mt-6 text-center text-xs text-zinc-600 font-mono tracking-wider">
+        DESIGNED WITH ♥️ <a href="https://mask-intelligence.web.app" target="_blank" rel="noopener noreferrer" className="text-indigo-400 hover:text-indigo-300 transition-colors hover:underline">MASK INTELLIGENCE</a> TEAM
+      </footer>
+
       {/* Full Preview Modal */}
       <AnimatePresence>
         {isPreviewOpen && screenshot && (
