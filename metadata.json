@@ -1,0 +1,5 @@
+{
+  "name": "Site Console Viewer",
+  "description": "View browser console logs from any website URL",
+  "requestFramePermissions": []
+}
